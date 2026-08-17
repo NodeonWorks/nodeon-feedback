@@ -5,6 +5,9 @@ body:
   - type: markdown
     attributes:
       value: |
+        > ⚠️ **This repository is public.** Don't include customer data, real order numbers, or any sensitive information — describe the problem in general terms.
+        > ⚠️ **Questo repository è pubblico.** Non inserire dati di clienti, numeri d'ordine reali o informazioni sensibili.
+        
         Thanks for taking the time to report a bug. Please fill out the sections below to help us investigate.
 
   - type: textarea
