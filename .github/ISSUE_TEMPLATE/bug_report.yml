@@ -48,9 +48,9 @@ body:
         - Orders
         - Inventory
         - Shipments
-        - Billing & Subscriptions
+        - Auth
+        - Dashboard
         - Settings
-        - Login / Authentication
         - Other
     validations:
       required: true
