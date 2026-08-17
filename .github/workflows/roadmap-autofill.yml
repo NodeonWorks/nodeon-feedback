@@ -1,0 +1,108 @@
+name: Roadmap autofill
+
+# Quando una issue viene aperta su questo repo pubblico:
+#  1. la aggiunge al GitHub Project org #3 con Status = Backlog
+#  2. compila i campi Project: Change type (da bug/feature), Area (dal dropdown
+#     del template), Short description (dal primo testo del template)
+#  3. le mette la label `roadmap` → così compare in automatico nella roadmap
+#     in-app (modello opt-out: rimuovi la label per nasconderla)
+#
+# Usa il token della GitHub App Nodeon[bot] (permesso Organization Projects:
+# Read & Write). Richiede i secret NODEON_APP_ID e NODEON_APP_PRIVATE_KEY e
+# l'App installata su questo repo. Repo pubblico → minuti Actions illimitati.
+
+on:
+  issues:
+    types: [opened]
+
+permissions:
+  contents: read
+
+jobs:
+  autofill:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Genera token della App
+        id: app
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.NODEON_APP_ID }}
+          private-key: ${{ secrets.NODEON_APP_PRIVATE_KEY }}
+          owner: NodeonWorks
+
+      - name: Popola Project + label roadmap
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ steps.app.outputs.token }}
+          script: |
+            const ORG = "NodeonWorks"
+            const PROJECT_NUMBER = 3
+            const issue = context.payload.issue
+            const labels = (issue.labels || []).map((l) => String(l.name || l).toLowerCase())
+
+            // 1. Project + campi (lookup per nome: robusto ai cambi di id)
+            const q = await github.graphql(`
+              query($org:String!,$num:Int!){ organization(login:$org){ projectV2(number:$num){
+                id
+                status: field(name:"Status"){ ... on ProjectV2SingleSelectField { id options{ id name } } }
+                changeType: field(name:"Change type"){ ... on ProjectV2SingleSelectField { id options{ id name } } }
+                area: field(name:"Area"){ ... on ProjectV2SingleSelectField { id options{ id name } } }
+                short: field(name:"Short description"){ ... on ProjectV2FieldCommon { id } }
+              } } }`, { org: ORG, num: PROJECT_NUMBER })
+            const p = q.organization.projectV2
+            const optId = (f, name) =>
+              f && f.options && name
+                ? (f.options.find((o) => o.name.toLowerCase() === String(name).toLowerCase()) || {}).id
+                : undefined
+
+            // 2. Aggiunge la issue al Project (idempotente) → itemId
+            const added = await github.graphql(`
+              mutation($p:ID!,$c:ID!){ addProjectV2ItemById(input:{projectId:$p, contentId:$c}){ item{ id } } }`,
+              { p: p.id, c: issue.node_id })
+            const itemId = added.addProjectV2ItemById.item.id
+
+            // 3. Deriva i valori
+            const typeName = labels.includes("bug") ? "Fix" : labels.includes("enhancement") ? "Feature" : null
+            const body = issue.body || ""
+            const section = (label) => {
+              const re = new RegExp("^#{1,6}\\s*" + label + "\\s*$", "i")
+              const lines = body.split(/\r?\n/)
+              const idx = lines.findIndex((l) => re.test(l.trim()))
+              if (idx < 0) return null
+              for (let j = idx + 1; j < lines.length; j++) {
+                const v = lines[j].trim()
+                if (!v) continue
+                if (v.startsWith("#")) break
+                if (/^_?no response_?$/i.test(v)) break
+                return v.replace(/[*_`]/g, "").trim()
+              }
+              return null
+            }
+            const areaName = section("Area")
+            const shortText = section("What problem does this solve\\?") || section("What happened\\?")
+
+            // 4. Scrive i campi
+            const setSel = async (fieldId, optionId) => {
+              if (!fieldId || !optionId) return
+              await github.graphql(`mutation($p:ID!,$i:ID!,$f:ID!,$o:String!){ updateProjectV2ItemFieldValue(input:{projectId:$p,itemId:$i,fieldId:$f,value:{singleSelectOptionId:$o}}){ projectV2Item{ id } } }`,
+                { p: p.id, i: itemId, f: fieldId, o: optionId })
+            }
+            const setText = async (fieldId, text) => {
+              if (!fieldId || !text) return
+              await github.graphql(`mutation($p:ID!,$i:ID!,$f:ID!,$t:String!){ updateProjectV2ItemFieldValue(input:{projectId:$p,itemId:$i,fieldId:$f,value:{text:$t}}){ projectV2Item{ id } } }`,
+                { p: p.id, i: itemId, f: fieldId, t: text.slice(0, 300) })
+            }
+
+            await setSel(p.status && p.status.id, optId(p.status, "Backlog"))
+            if (typeName) await setSel(p.changeType && p.changeType.id, optId(p.changeType, typeName))
+            if (areaName) await setSel(p.area && p.area.id, optId(p.area, areaName))
+            if (shortText) await setText(p.short && p.short.id, shortText)
+
+            // 5. Label roadmap (opt-out)
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issue.number,
+              labels: ["roadmap"],
+            })
+            core.info(`Autofill ok: type=${typeName} area=${areaName} short=${shortText ? "sì" : "no"}`)
