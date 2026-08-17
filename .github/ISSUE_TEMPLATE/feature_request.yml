@@ -41,10 +41,9 @@ body:
         - Orders
         - Inventory
         - Shipments
-        - Billing & Subscriptions
+        - Auth
+        - Dashboard
         - Settings
-        - Reporting & Analytics
-        - Integrations
         - Other
     validations:
       required: true
